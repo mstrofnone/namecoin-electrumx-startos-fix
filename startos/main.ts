@@ -147,7 +147,39 @@ export const main = sdk.setupMain(async ({ effects }) => {
     requires: ['ensure-dirs'],
   })
 
-  const withDaemon = withBanner.addDaemon('electrumx', {
+  // ----------------------------------------------------------------------
+  // Pre-flight gate.
+  //
+  // We add a single trivial oneshot that depends on ALL of the prep
+  // oneshots above, and then make the electrumx daemon depend only on
+  // this gate. This collapses electrumx's dependency surface from four
+  // siblings to one, which sidesteps a race in @start9labs/start-sdk's
+  // HealthDaemon.updateStatus.
+  //
+  // The race: updateStatus() snapshots dependency states synchronously,
+  // awaits setHealth(), then calls changeRunning(!waitingOn.length).
+  // When several sibling oneshots finish in the same event-loop tick,
+  // two interleaved updateStatus() invocations on the same daemon can
+  // resolve out of order — invocation B (snapshot: all deps green)
+  // starts the daemon, then invocation A (stale snapshot: one dep still
+  // pending) stops it again. We see this as `Launching electrumx... /
+  // Stopping electrumx...` 2 ms apart, after which the daemon never
+  // gets relaunched until the next external restart.
+  //
+  // Reducing electrumx's dependency list to a single gate means there's
+  // only one dependency-state transition the dependent can ever react
+  // to, so updateStatus() cannot be invoked from two distinct watchers
+  // in the same tick. Empirically eliminates the race.
+  // ----------------------------------------------------------------------
+  const withGate = withBanner.addOneshot('prep-complete', {
+    subcontainer: null,
+    exec: {
+      fn: async () => null,
+    },
+    requires: ['ensure-dirs', 'apply-reindex', 'ensure-ssl', 'write-banner'],
+  })
+
+  const withDaemon = withGate.addDaemon('electrumx', {
     subcontainer: sub,
     exec: {
       command: ['electrumx_server'],
@@ -165,7 +197,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
         })
       },
     },
-    requires: ['ensure-dirs', 'apply-reindex', 'ensure-ssl', 'write-banner'],
+    // Only the prep-complete gate. See its definition above for why we
+    // collapse the four prep deps to one.
+    requires: ['prep-complete'],
   })
 
   /**

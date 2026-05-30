@@ -55,10 +55,19 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
   const sslReceipt = await sslOrigin.export([ssl])
 
   // ---- WS (Electrum over WebSocket — needs websockets<11 pin) ----
+  // protocol=null + addSsl=null so StartOS does NOT wrap the upstream
+  // plaintext WS port with an auto-generated TLS frontend. ElectrumX
+  // serves WS natively on 50003; we want the lxcbr0 NAT to expose that
+  // port directly so Tor onion services can blind-forward to it.
+  // The previous `protocol: 'http'` triggered StartOS's addSsl wrapping,
+  // which made the only lxcbr0-reachable address an SSL-wrapped sibling
+  // port — leaving onion → plaintext-WS unreachable from sibling LXCs.
   const wsMulti = sdk.MultiHost.of(effects, 'electrum-ws')
   const wsOrigin = await wsMulti.bindPort(electrumWsPort, {
-    protocol: 'http',
+    protocol: null,
     preferredExternalPort: electrumWsPort,
+    addSsl: null,
+    secure: { ssl: false },
   })
   const ws = sdk.createInterface(effects, {
     name: i18n('Electrum WebSocket Interface'),
@@ -74,10 +83,17 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
   const wsReceipt = await wsOrigin.export([ws])
 
   // ---- WSS (Electrum over secure WebSocket) ----
+  // ElectrumX serves WSS natively (its own TLS, same cert as the SSL
+  // interface). Same reason as the WS interface above: declare native
+  // SSL via secure.ssl=true and disable addSsl so the lxcbr0 NAT exposes
+  // the upstream port directly. Onion services and external clients see
+  // the same TLS endpoint.
   const wssMulti = sdk.MultiHost.of(effects, 'electrum-wss')
   const wssOrigin = await wssMulti.bindPort(electrumWssPort, {
-    protocol: 'http',
+    protocol: null,
     preferredExternalPort: electrumWssPort,
+    addSsl: null,
+    secure: { ssl: true },
   })
   const wss = sdk.createInterface(effects, {
     name: i18n('Electrum Secure WebSocket Interface'),
